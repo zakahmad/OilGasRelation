@@ -1,0 +1,144 @@
+---
+title: "Relationship Between Gasoline and Crude Oil Prices"
+author: "Zak Ahmad"
+date: "May 23, 2015"
+output: html_document
+---
+Recently, a colleague told me he doesn't seem to that gas prices are affected by oil prices. So the data savvy person in me decided to take a look into it.
+
+# The Data
+
+FRED <http://research.stlouisfed.org/fred2/> (Federal Reserve Economic Data of St. Louis Fed) has historical data for WTI Crude Oil and average Gasoline prices. The gasoline prices, averaged from roughly 900 retail outlets, are reported weekly at 8:00AM every Monday. As for crude oil, FRED does have daily data but I will use the weekly data reported every Friday since the gas prices are weekly.
+
+A copy of the data in csv form is in the github <https://github.com/zakahmad/OilGasRelation> repository for this post along with R code used for the analysis.
+
+# Prepping the Data
+
+Let’s read the data into dataframes and make sure the date and price data types are plausible. Also, we will compute the (weekly) percent change of price so this is also computed. Let’s look at the summary of the data
+
+```{r warning=FALSE}
+# data files
+gasFile <- 'gas-prices.csv'
+usoFile <- 'wti-crude-oil-prices.csv'
+# read data from files
+gasDF <- read.csv(gasFile,stringsAsFactors=FALSE)
+oilDF <- read.csv(usoFile,stringsAsFactors=FALSE)
+# change Date data type from integer to Date
+gasDF$DATE <- as.Date(gasDF$DATE)
+oilDF$DATE <- as.Date(oilDF$DATE)
+# change Prices data type numeric from char
+gasDF$VALUE <- as.numeric(gasDF$VALUE)
+oilDF$VALUE <- as.numeric(oilDF$VALUE)
+# compute percent change
+gasPctChg <- 100 * diff(gasDF$VALUE) / gasDF$VALUE[1:length(gasDF$VALUE) - 1]
+oilPctChg <- 100 * diff(oilDF$VALUE) / oilDF$VALUE[1:length(oilDF$VALUE) - 1]
+# delete first row since percent change is 1 row shorter
+gasDF <- gasDF[-1,]
+oilDF <- oilDF[-1,]
+# Store percent change to DF
+gasDF$PctChg <- gasPctChg
+oilDF$PctChg <- oilPctChg
+# print summary of gasoline data
+summary(gasDF)
+# print summary of crude oil data
+summary(oilDF)
+```
+
+We see that the gas prices (and therefore the percent change) has NA's so we'll remove them.
+```{r}
+# remove rows with NAs
+gasDF <- gasDF[complete.cases(gasDF),]
+```
+
+Also, there are two issues with the dates of gas and oil prices. The first, is the data for oil prices goes back as far as Jan 13th 1986 while the gas prices only go back to Aug 27th 1990. We therefore can only compare price changes since Aug 27th 1990.
+
+The easiest and quickest way to align both data sets is to merge them into a single dataframe by date. This brings us to the second issue with the dates. Oil prices are reported every Friday and gas prices every Monday. So if we were to merge the two prices by date we’ll end up with an empty dataframe!
+
+One solution is to shift the dates of oil prices ahead by 3 days.
+```{r}
+# shift oil price dates by 3 days to align with gas dates
+oilDF$DATE <- oilDF$DATE+3
+```
+
+Now we can merge them and rename some columns to something more descriptive than what is returned from the merge function.
+```{r}
+# merge oil and gas prices by date
+oilgasDF <- merge(gasDF,oilDF,by="DATE",all.x=FALSE)
+# rename columns to be more descriptive
+colnames(oilgasDF)[2] <- "GasPrice"
+colnames(oilgasDF)[3] <- "GasPctChg"
+colnames(oilgasDF)[4] <- "OilPrice"
+colnames(oilgasDF)[5] <- "OilPctChg"
+```
+
+# Correlation of Oil and Gas Prices
+
+Let's look at a scatter plot of gas versus oil prices
+```{r echo=FALSE, warning=FALSE}
+# load libraries used for making a nice scatter plot
+require(ggplot2)
+require(gridExtra)
+require(ggExtra)
+# make scatter plot with OilPrice on the x-axis and GasPrice on y-axis
+# use white background and grey major lines along with blue dots
+# then make sure the x-axis runs in increments of 10 and y-axis in 0.5
+p <- ggplot(oilgasDF, aes(OilPrice, GasPrice)) +
+    theme(panel.background = element_rect(fill = 'white'),
+          panel.grid.major = element_line(colour = "grey"),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black")) +
+    xlab("Crude Oil Price (USD per Barrel)") +
+    ylab("Avg Nat'l Gas Price (USD per Gallon)") +
+    geom_point(color="blue", size = 1) +
+    geom_abline(slope=3.5/140, intercept=0.5)+
+    annotate("text", x = 95, y = 2.2, label = "Diagonal Trendline \n (not best-fit line)", size = 4) +
+    scale_x_continuous(breaks = seq(floor(min(oilgasDF$OilPrice)/10)*10,ceiling(max(oilgasDF$OilPrice)/10)*10,by=10)) +
+    scale_y_continuous(breaks = seq(floor(min(oilgasDF$GasPrice)),ceiling(max(oilgasDF$GasPrice)),by=0.5))
+# add histograms of OilPrice and GasPrice to the top and right margins
+ggMarginal(p, type = "histogram")
+```
+
+Something interesting pops up here: we see that owners of gas stations will not drop the price of gas below a certain number that follows a "trend line" roughly captured by the diagonal line, which itself is a function of oil price. The "trend line" is probably the break-even price gas stations buy gasoline at, or cost of production and distribution for gas stations owned by refiners. But, here’s the interesting part, gas station owners will happily up-charge you for gasoline. This can be clearly seen by frequent deviations above the diagonal line but seldom below it! Why am I not surprised ? :-)
+
+Let’s move on to correlation.
+
+When we compute the Pearson correlation using oil and gas prices, we get a whopping `r round(cor(oilgasDF$OilPrice,oilgasDF$GasPrice),2)` !! This shouldn’t come as a surprise given the obvious linear relationship between oil and gas prices shown in the plot above. As a reminder, a correlation this high means that whenever crude oil increases in price then average gas price must increase.
+
+There’s an issue here: although we have an incredibly high correlation but if, for instance, we look at when crude oil was roughly 65 dollars per barrel, we see that average gas price was anywhere between, roughly, 2.4 and 3.5 dollars per gallon. Why do we have a significant deviation even though we have a high correlation? I have two reasons, and there might be more. First, the histograms on the top and right margins suggest that a good chunk of our observations are in the lower left corner of graph which might contribute to the higher correlation since they are less scattered. The second (more fundamental) reason, is that I think we shouldn’t be looking at the correlation between crude oil prices and average gas prices to begin with! Instead we should look at the correlation between the change in prices (this is why the percent change was computed above).
+
+# Correlation of the Change in Oil and Gas Prices
+
+```{r echo=FALSE, warning=FALSE}
+# make scatter plot with OilPctChg on the x-axis and GasPctChg on y-axis
+# use white background and grey major lines along with blue dots
+p <- ggplot(oilgasDF, aes(OilPctChg, GasPctChg)) +
+    theme(panel.background = element_rect(fill = 'white'),
+          panel.grid.major = element_line(colour = "grey"),
+          axis.text.x = element_text(colour="black"),
+          axis.text.y = element_text(colour="black")) +
+    xlab("Percent Change in Crude Oil Prices (%)") +
+    ylab("Percent Change in Avg Gas Prices (%)") +
+    geom_point(color="blue",size=1)
+# add histograms of OilPrice and GasPrice to the top and right of the plot, respectively
+ggMarginal(p, type = "histogram")
+```
+
+Now looking at the marginal histograms, we see the data has a different distribution which is closely represented by a normal distribution. The correlation between the change in crude oil prices and the change in average gas prices is now `r round(cor(oilgasDF$OilPctChg,oilgasDF$GasPctChg),2)`. This lower correlation is probably a more accurate representation of how average gas prices change in response to changes in oil prices. I actually think this correlation value makes more sense since there are probably other factors that contribute to gas prices: competition (or lack of it), supply, and demand to name a few.
+
+However, one of the reasons, which deserve some merit, as to why the correlation is lower, is that we are using weekly data when we know oil prices change daily and gas stations owners don’t have to abide by weekly changes in gas prices. Also, we had to lag crude oil prices by 3 days since they are reported on Fridays and gas prices are reported on Mondays. Obviously, during the weekend, oil prices might have changed and gas prices could have adjusted accordingly and our data would capture the change in gas prices but would miss out on any change in oil prices that would have occurred during the weekend.
+
+Another interesting plot to look at is a correlogram by lagging the change in average gas prices against the change in oil prices.
+
+```{r echo=FALSE}
+# create correlogram of lagging GasPctChg against OilPctChg
+ccf(oilgasDF$GasPctChg,oilgasDF$OilPctChg,lag.max=10,main="",ylab="Correlation",xlab="Lag Period (week)")
+```
+
+correlogramIn this correlogram, the change in average gas prices were lagged by one period at a time then the correlation computed against change in crude oil prices for each lagged period.
+
+The results are actually quite interesting. There is still a decent correlation up to 3 weeks after a change in oil price is observed but the correlation quickly diminishes beyond that.
+
+# Conclusion
+
+Yes changes in gas prices are correlated with changes in oil prices to a certain extent. Keep in mind, these are average gas prices across the U.S. so the findings in this post might not necessarily translate to the gas station across the street from your place.
+
